@@ -102,12 +102,481 @@ final class OpenCodeRuntimeKitPublicAPIContractTests: XCTestCase {
 		XCTAssertEqual(
 			OpenCodeEvidenceProvenance.allCases.map(\.rawValue),
 			["synthetic", "deterministic-fake", "installed-binary", "credentialed-live"])
-		XCTAssertEqual(OpenCodeExecutableSigningClass.allCases.count, 6)
-		XCTAssertEqual(OpenCodeExecutablePathClass.allCases.count, 6)
+		XCTAssertEqual(
+			OpenCodeExecutableSigningClass.allCases.map(\.rawValue),
+			["appleDeveloperID", "otherSigned", "adHoc", "unsigned", "invalid", "unreadable"])
+		XCTAssertEqual(
+			OpenCodeExecutablePathClass.allCases.map(\.rawValue),
+			["openCodeManagedBin", "homebrew", "npmGlobal", "userLocal", "system", "unknown"])
 		XCTAssertEqual(OpenCodeExecutableArchitecture.allCases.map(\.rawValue),
 			["arm64", "x86_64", "universal", "unknown"])
-		XCTAssertEqual(OpenCodeRuntimeUnresolvableReason.allCases.count, 8)
-		XCTAssertEqual(OpenCodeSuppressionReason.allCases.count, 10)
+		XCTAssertEqual(
+			OpenCodeRuntimeUnresolvableReason.allCases.map(\.rawValue),
+			[
+				"noCommand", "commandNotFound", "notExecutable", "isDirectory",
+				"canonicalPathUnreadable", "hashUnreadable", "versionProbeFailed",
+				"versionUnparsable"
+			])
+		XCTAssertEqual(
+			OpenCodeSuppressionReason.allCases.map(\.rawValue),
+			[
+				"sessionLoadReplay", "lowLevelToolNoise", "statusTitleNoise", "emptyPayload",
+				"duplicateEvent", "lateEventAfterTerminal", "profileSuppressedToolEvent",
+				"intentionallyUnsurfacedType", "providerInternalBuffering", "foreignSessionIdentity"
+			])
+		XCTAssertEqual(OpenCodeAdmissionEnforcementStage.allCases.map(\.rawValue), [0, 1, 2, 3])
+	}
+
+	/// Four String-raw vocabularies are deliberately NOT `CaseIterable` — the
+	/// runtime never enumerates them — so `allCases` cannot pin them. Their raw
+	/// values are asserted one by one and their case SET is pinned by the
+	/// `default`-less switches in `tag(_:)` below: adding, removing, or renaming
+	/// a case stops this target compiling.
+	func testNonEnumerableRawVocabulariesKeepTheirRawValuesAndCaseSets() {
+		let directions: [OpenCodeEnvelopeDirection] = [.inbound, .outbound]
+		XCTAssertEqual(directions.map(\.rawValue), ["inbound", "outbound"])
+		XCTAssertEqual(directions.map(Self.tag), ["inbound", "outbound"])
+
+		let kinds: [OpenCodeEnvelopeKind] = [.request, .response, .notification, .invalid]
+		XCTAssertEqual(kinds.map(\.rawValue), ["request", "response", "notification", "invalid"])
+		XCTAssertEqual(kinds.map(Self.tag), ["request", "response", "notification", "invalid"])
+
+		let terminalStates: [OpenCodePartialToolInputAssembler.TerminalState] =
+			[.completed, .failed, .cancelled, .expired]
+		XCTAssertEqual(terminalStates.map(\.rawValue), ["completed", "failed", "cancelled", "expired"])
+		XCTAssertEqual(terminalStates.map(Self.tag), ["completed", "failed", "cancelled", "expired"])
+
+		let usageSources: [OpenCodeUsageSnapshot.Source] = [.promptResponse, .usageUpdate]
+		XCTAssertEqual(usageSources.map(\.rawValue), ["promptResponse", "usageUpdate"])
+		XCTAssertEqual(usageSources.map(Self.tag), ["promptResponse", "usageUpdate"])
+
+		// Raw values are the persisted spelling in both directions.
+		XCTAssertEqual(OpenCodeEnvelopeDirection(rawValue: "inbound"), .inbound)
+		XCTAssertEqual(OpenCodeEnvelopeKind(rawValue: "notification"), .notification)
+		XCTAssertEqual(OpenCodePartialToolInputAssembler.TerminalState(rawValue: "expired"), .expired)
+		XCTAssertEqual(OpenCodeUsageSnapshot.Source(rawValue: "usageUpdate"), .usageUpdate)
+		XCTAssertNil(OpenCodeEnvelopeKind(rawValue: "Request"), "Raw values are case-sensitive")
+	}
+
+	/// `OpenCodeAdmissionEnforcementStage` carries its vocabulary TWICE: as Int
+	/// raw values (persisted in observation records) and as the name spellings
+	/// hand-coded in `init?(overrideValue:)`. Both are pinned, and every stage
+	/// is round-tripped through both spellings — a rename on one side without
+	/// the other would silently downgrade an operator override to nil, which
+	/// fails safe to observe-only and would therefore never be noticed.
+	func testEnforcementStageRawValuesAndOverrideSpellingsAreBothPinned() {
+		let stages = OpenCodeAdmissionEnforcementStage.allCases
+		XCTAssertEqual(stages.map(\.rawValue), [0, 1, 2, 3])
+		let names = ["observeOnly", "enforceKnownBad", "enforceSafetyInvariants", "enforceAll"]
+		for (stage, name) in zip(stages, names) {
+			XCTAssertEqual(
+				OpenCodeAdmissionEnforcementStage(overrideValue: name), stage,
+				"Override name \(name) must still resolve to \(stage)")
+			XCTAssertEqual(
+				OpenCodeAdmissionEnforcementStage(overrideValue: String(stage.rawValue)), stage,
+				"Numeric override \(stage.rawValue) must still resolve to \(stage)")
+			XCTAssertEqual(OpenCodeAdmissionEnforcementStage(rawValue: stage.rawValue), stage)
+		}
+		XCTAssertNil(OpenCodeAdmissionEnforcementStage(overrideValue: "ObserveOnly"), "Names are case-sensitive")
+		XCTAssertNil(OpenCodeAdmissionEnforcementStage(rawValue: 4), "The ladder has exactly four rungs")
+	}
+
+	/// The vocabularies with no raw value at all. Their closure is what matters
+	/// — every one is switched over somewhere in RepoPrompt — so each is pinned
+	/// by a `default`-less switch in `tag(_:)` plus a runtime assertion over one
+	/// constructed value per case. A new case fails to compile; a renamed or
+	/// deleted case fails to compile; a reordered case fails at runtime.
+	func testRawValuelessVocabulariesStayClosed() throws {
+		XCTAssertEqual(
+			([.absent, .valid(.observeOnly), .malformed] as [OpenCodeEnforcementOverride]).map(Self.tag),
+			["absent", "valid", "malformed"])
+
+		let classifications: [OpenCodeAdmissionClassification] = [
+			.certifiedIdentity(familyID: "f"), .behaviorallyAdmissible(familyID: "f"), .unknownRuntime,
+			.knownBad(reason: "r"), .safetyInvariantViolation(reasons: ["r"]), .unresolvable(.noCommand)
+		]
+		XCTAssertEqual(classifications.map(Self.tag), [
+			"certifiedIdentity", "behaviorallyAdmissible", "unknownRuntime",
+			"knownBad", "safetyInvariantViolation", "unresolvable"
+		])
+
+		let rejectReasons: [OpenCodeAdmissionRejectReason] = [
+			.knownBad("r"), .unresolvableIdentity(.noCommand), .secureContractViolation(["v"]),
+			.effectiveConfigUnsafe(["u"]), .protocolMismatch(1), .unknownRuntime
+		]
+		XCTAssertEqual(rejectReasons.map(Self.tag), [
+			"knownBad", "unresolvableIdentity", "secureContractViolation",
+			"effectiveConfigUnsafe", "protocolMismatch", "unknownRuntime"
+		])
+
+		let decisions: [OpenCodeAdmissionDecision] = [
+			.admitObserveOnly(.unknownRuntime), .admitCertified(familyID: "f"),
+			.admitBehavioral(familyID: "f"), .reject(.unknownRuntime)
+		]
+		XCTAssertEqual(decisions.map(Self.tag), [
+			"admitObserveOnly", "admitCertified", "admitBehavioral", "reject"
+		])
+
+		let sha = try XCTUnwrap(OpenCodeSHA256(String(repeating: "ab", count: 32)))
+		let versionRange = try XCTUnwrap(
+			OpenCodeCliVersionRange(
+				lowerBound: XCTUnwrap(OpenCodeCliVersion(string: "1.0.0")),
+				upperBound: XCTUnwrap(OpenCodeCliVersion(string: "2.0.0"))))
+		let contractKey = OpenCodeContractKey(
+			input: OpenCodeContractKeyInput(
+				acpProtocolVersion: 1, agentName: "opencode",
+				capabilitySnapshotDigest: sha, usedSurfaceLockHash: nil))
+		let knownBadMatches: [OpenCodeKnownBadMatch] = [
+			.sha256(sha), .contractKey(contractKey), .cliVersionRange(versionRange)
+		]
+		XCTAssertEqual(knownBadMatches.map(Self.tag), ["sha256", "contractKey", "cliVersionRange"])
+
+		let decodingErrors: [OpenCodeManifestDecodingError] = [
+			.notAnObject, .missingKey("k"), .wrongType("k"), .unexpectedProperty("k"),
+			.unexpectedSchemaVersion(2), .invalidHash("h"), .invalidEnum("e"), .invalidVersion("v"),
+			.invertedVersionRange("f"), .emptyString("k"), .duplicateCertifiedIdentity("k"),
+			.knownBadMatchAxisCount(2)
+		]
+		XCTAssertEqual(decodingErrors.map(Self.tag), [
+			"notAnObject", "missingKey", "wrongType", "unexpectedProperty",
+			"unexpectedSchemaVersion", "invalidHash", "invalidEnum", "invalidVersion",
+			"invertedVersionRange", "emptyString", "duplicateCertifiedIdentity",
+			"knownBadMatchAxisCount"
+		])
+
+		let unsafeReasons: [OpenCodeEffectiveConfigUnsafeReason] = [
+			.managedModeMissing("m"), .prohibitedToolAllowed(mode: "m", tool: "t"),
+			.wildcardNotDenied(mode: "m"), .repoPromptMCPEntryMissing,
+			.repoPromptMCPEntryWrongCommand(expected: "e", actual: "a"),
+			.repoPromptMCPEntryWrongEnvironment(expected: "e", actual: "a"),
+			.repoPromptMCPEntryMalformedEnvironment("d"), .repoPromptMCPEntryMalformedEnabled("d"),
+			.repoPromptMCPEntryWrongType("t"), .malformedResolvedShape("d"),
+			.repoPromptMCPEntryNotDisabled, .duplicateRepoPromptMCPAlias("a"),
+			.serverOverrideDetected("d")
+		]
+		XCTAssertEqual(unsafeReasons.map(Self.tag), [
+			"managedModeMissing", "prohibitedToolAllowed", "wildcardNotDenied",
+			"repoPromptMCPEntryMissing", "repoPromptMCPEntryWrongCommand",
+			"repoPromptMCPEntryWrongEnvironment", "repoPromptMCPEntryMalformedEnvironment",
+			"repoPromptMCPEntryMalformedEnabled", "repoPromptMCPEntryWrongType",
+			"malformedResolvedShape", "repoPromptMCPEntryNotDisabled",
+			"duplicateRepoPromptMCPAlias", "serverOverrideDetected"
+		])
+
+		XCTAssertEqual(
+			([.safe(diagnostics: []), .unsafe(reasons: [])] as [OpenCodeEffectiveConfigVerdict]).map(Self.tag),
+			["safe", "unsafe"])
+
+		let dispositions: [OpenCodeEnvelopeDisposition] = [
+			.normalized(eventCount: 1), .suppressed(reason: .emptyPayload), .opaqueUnknown, .notApplicable
+		]
+		XCTAssertEqual(dispositions.map(Self.tag), ["normalized", "suppressed", "opaqueUnknown", "notApplicable"])
+
+		let violations: [OpenCodeSecureLaunchContract.Violation] = [
+			.missingACPSubcommand, .missingRequiredArgument("a"), .duplicateArgument("a"),
+			.nonLoopbackHostname("h"), .fixedPort("p"), .mdnsEnabled, .corsOriginSupplied,
+			.pureModeMissing, .autoApprovalFlag("f"), .unexpectedSecurityFlag("f"),
+			.missingServerPassword, .weakServerPassword, .serverPasswordInArguments
+		]
+		XCTAssertEqual(violations.map(Self.tag), [
+			"missingACPSubcommand", "missingRequiredArgument", "duplicateArgument",
+			"nonLoopbackHostname", "fixedPort", "mdnsEnabled", "corsOriginSupplied",
+			"pureModeMissing", "autoApprovalFlag", "unexpectedSecurityFlag",
+			"missingServerPassword", "weakServerPassword", "serverPasswordInArguments"
+		])
+
+		let refusals: [OpenCodeRecoveryRefusalReason] = [
+			.attemptAlreadyMade, .workspaceRootChanged(persisted: "p", current: "c"),
+			.runtimeUnresolvable(.noCommand), .runtimeNotAdmitted, .noRecoveryCapability,
+			.sessionIdentityMissing, .frontierContentEvidenceUnsupported, .frontierOverflowed
+		]
+		XCTAssertEqual(refusals.map(Self.tag), [
+			"attemptAlreadyMade", "workspaceRootChanged", "runtimeUnresolvable",
+			"runtimeNotAdmitted", "noRecoveryCapability", "sessionIdentityMissing",
+			"frontierContentEvidenceUnsupported", "frontierOverflowed"
+		])
+
+		let plans: [OpenCodeSessionRecoveryPlan] = [
+			.resume(sessionID: "s"),
+			.loadWithReplayDeduplication(sessionID: "s", frontier: OpenCodeTranscriptFrontier()),
+			.refuse(.attemptAlreadyMade)
+		]
+		XCTAssertEqual(plans.map(Self.tag), ["resume", "loadWithReplayDeduplication", "refuse"])
+
+		let resolutions: [OpenCodeRuntimeResolution] = [
+			.resolved(Self.sampleIdentity()), .unresolvable(.noCommand)
+		]
+		XCTAssertEqual(resolutions.map(Self.tag), ["resolved", "unresolvable"])
+
+		var assembler = OpenCodePartialToolInputAssembler()
+		let key = OpenCodePartialToolInputAssembler.Key(sessionID: "s", toolCallID: "t")
+		let accumulated = assembler.ingestClassified(
+			key: key, toolName: "read", rawInput: ["path": "/a"], textFragment: nil, status: nil)
+		let terminal = assembler.ingestClassified(
+			key: key, toolName: "read", rawInput: nil, textFragment: nil, status: "completed")
+		let duplicate = assembler.ingestClassified(
+			key: key, toolName: "read", rawInput: nil, textFragment: nil, status: "completed")
+		let late = assembler.ingestClassified(
+			key: key, toolName: "read", rawInput: ["path": "/b"], textFragment: nil, status: nil)
+		XCTAssertEqual(
+			[accumulated, terminal, duplicate, late].map(Self.tag),
+			["accumulated", "terminal", "duplicateTerminal", "lateUpdate"])
+	}
+
+	/// The closed vocabularies that are expressed as constants rather than
+	/// cases. Every one of these values is either a wire spelling, a persisted
+	/// bound, or a security floor, so a silent edit is exactly as damaging as a
+	/// renamed enum case.
+	func testConstantVocabulariesKeepTheirValues() {
+		XCTAssertEqual(OpenCodeSecureLaunchContract.requiredHostname, "127.0.0.1")
+		XCTAssertEqual(OpenCodeSecureLaunchContract.requiredPortArgument, "0")
+		XCTAssertEqual(
+			OpenCodeSecureLaunchContract.serverPasswordEnvironmentKey, "OPENCODE_SERVER_PASSWORD")
+		XCTAssertEqual(OpenCodeSecureLaunchContract.minimumServerPasswordLength, 32)
+
+		XCTAssertEqual(OpenCodeJSONNumberPolicy.maxSafeIntegerInDouble, 9_007_199_254_740_991)
+		XCTAssertEqual(OpenCodeJSONNumberPolicy.maxUsageTokenCount, 1_000_000_000_000)
+
+		XCTAssertEqual(OpenCodeTranscriptFrontier.maxTrackedIdentifiers, 512)
+		XCTAssertEqual(OpenCodeTranscriptFrontier.contentEvidenceVersion, 2)
+		XCTAssertEqual(OpenCodeTranscriptFrontier.maxObservedTextScalars, 1 << 24)
+		XCTAssertEqual(OpenCodeTranscriptFrontier.maxEventOrdinal, 1 << 40)
+
+		XCTAssertEqual(OpenCodeUsageSnapshot.maxProvenanceEntryPreviewBytes, 4096)
+		XCTAssertEqual(OpenCodeUsageSnapshot.maxRetainedProvenanceEntries, 8)
+		XCTAssertEqual(OpenCodeUsageSnapshot.maxCostCurrencyUTF8Bytes, 16)
+		XCTAssertEqual(OpenCodeUsageSnapshot.maxCostCurrencyScalars, 8)
+		XCTAssertEqual(
+			OpenCodeUsageSnapshot.maxRetainedProvenanceBytes,
+			OpenCodeUsageSnapshot.maxProvenanceEntryPreviewBytes
+				* OpenCodeUsageSnapshot.maxRetainedProvenanceEntries)
+
+		XCTAssertEqual(OpenCodeCompatibilityManifest.expectedSchemaVersion, 1)
+		XCTAssertEqual(OpenCodeSecretRedactor.redactionMarker, "«redacted»")
+		XCTAssertEqual(OpenCodeAdmissionEnforcementResolution.shippingStage, .observeOnly)
+
+		// The session-capability flag set is a closed vocabulary in disguise:
+		// `.none` names every flag exactly once, so a flag added without a
+		// decision here fails to compile.
+		let capabilities = OpenCodeCapabilitySnapshot.SessionCapabilities.none
+		XCTAssertEqual(
+			[
+				capabilities.loadSession, capabilities.listSessions, capabilities.resumeSession,
+				capabilities.closeSession, capabilities.unstableForkSession
+			],
+			[false, false, false, false, false])
+		XCTAssertEqual(
+			OpenCodeCapabilitySnapshot.SessionCapabilities(
+				loadSession: true, listSessions: true, resumeSession: true,
+				closeSession: true, unstableForkSession: true),
+			OpenCodeCapabilitySnapshot.SessionCapabilities(
+				loadSession: true, listSessions: true, resumeSession: true,
+				closeSession: true, unstableForkSession: true))
+	}
+
+	// MARK: - Case-set pins
+	//
+	// Every switch below is deliberately `default`-less: it is the compile-time
+	// half of the closed-vocabulary contract. The returned tag is the case name,
+	// so the runtime half reads as a plain expected-list assertion.
+
+	private static func tag(_ value: OpenCodeEnvelopeDirection) -> String {
+		switch value {
+		case .inbound: return "inbound"
+		case .outbound: return "outbound"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeEnvelopeKind) -> String {
+		switch value {
+		case .request: return "request"
+		case .response: return "response"
+		case .notification: return "notification"
+		case .invalid: return "invalid"
+		}
+	}
+
+	private static func tag(_ value: OpenCodePartialToolInputAssembler.TerminalState) -> String {
+		switch value {
+		case .completed: return "completed"
+		case .failed: return "failed"
+		case .cancelled: return "cancelled"
+		case .expired: return "expired"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeUsageSnapshot.Source) -> String {
+		switch value {
+		case .promptResponse: return "promptResponse"
+		case .usageUpdate: return "usageUpdate"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeEnforcementOverride) -> String {
+		switch value {
+		case .absent: return "absent"
+		case .valid: return "valid"
+		case .malformed: return "malformed"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeAdmissionClassification) -> String {
+		switch value {
+		case .certifiedIdentity: return "certifiedIdentity"
+		case .behaviorallyAdmissible: return "behaviorallyAdmissible"
+		case .unknownRuntime: return "unknownRuntime"
+		case .knownBad: return "knownBad"
+		case .safetyInvariantViolation: return "safetyInvariantViolation"
+		case .unresolvable: return "unresolvable"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeAdmissionRejectReason) -> String {
+		switch value {
+		case .knownBad: return "knownBad"
+		case .unresolvableIdentity: return "unresolvableIdentity"
+		case .secureContractViolation: return "secureContractViolation"
+		case .effectiveConfigUnsafe: return "effectiveConfigUnsafe"
+		case .protocolMismatch: return "protocolMismatch"
+		case .unknownRuntime: return "unknownRuntime"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeAdmissionDecision) -> String {
+		switch value {
+		case .admitObserveOnly: return "admitObserveOnly"
+		case .admitCertified: return "admitCertified"
+		case .admitBehavioral: return "admitBehavioral"
+		case .reject: return "reject"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeKnownBadMatch) -> String {
+		switch value {
+		case .sha256: return "sha256"
+		case .contractKey: return "contractKey"
+		case .cliVersionRange: return "cliVersionRange"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeManifestDecodingError) -> String {
+		switch value {
+		case .notAnObject: return "notAnObject"
+		case .missingKey: return "missingKey"
+		case .wrongType: return "wrongType"
+		case .unexpectedProperty: return "unexpectedProperty"
+		case .unexpectedSchemaVersion: return "unexpectedSchemaVersion"
+		case .invalidHash: return "invalidHash"
+		case .invalidEnum: return "invalidEnum"
+		case .invalidVersion: return "invalidVersion"
+		case .invertedVersionRange: return "invertedVersionRange"
+		case .emptyString: return "emptyString"
+		case .duplicateCertifiedIdentity: return "duplicateCertifiedIdentity"
+		case .knownBadMatchAxisCount: return "knownBadMatchAxisCount"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeEffectiveConfigUnsafeReason) -> String {
+		switch value {
+		case .managedModeMissing: return "managedModeMissing"
+		case .prohibitedToolAllowed: return "prohibitedToolAllowed"
+		case .wildcardNotDenied: return "wildcardNotDenied"
+		case .repoPromptMCPEntryMissing: return "repoPromptMCPEntryMissing"
+		case .repoPromptMCPEntryWrongCommand: return "repoPromptMCPEntryWrongCommand"
+		case .repoPromptMCPEntryWrongEnvironment: return "repoPromptMCPEntryWrongEnvironment"
+		case .repoPromptMCPEntryMalformedEnvironment: return "repoPromptMCPEntryMalformedEnvironment"
+		case .repoPromptMCPEntryMalformedEnabled: return "repoPromptMCPEntryMalformedEnabled"
+		case .repoPromptMCPEntryWrongType: return "repoPromptMCPEntryWrongType"
+		case .malformedResolvedShape: return "malformedResolvedShape"
+		case .repoPromptMCPEntryNotDisabled: return "repoPromptMCPEntryNotDisabled"
+		case .duplicateRepoPromptMCPAlias: return "duplicateRepoPromptMCPAlias"
+		case .serverOverrideDetected: return "serverOverrideDetected"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeEffectiveConfigVerdict) -> String {
+		switch value {
+		case .safe: return "safe"
+		case .unsafe: return "unsafe"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeEnvelopeDisposition) -> String {
+		switch value {
+		case .normalized: return "normalized"
+		case .suppressed: return "suppressed"
+		case .opaqueUnknown: return "opaqueUnknown"
+		case .notApplicable: return "notApplicable"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeSecureLaunchContract.Violation) -> String {
+		switch value {
+		case .missingACPSubcommand: return "missingACPSubcommand"
+		case .missingRequiredArgument: return "missingRequiredArgument"
+		case .duplicateArgument: return "duplicateArgument"
+		case .nonLoopbackHostname: return "nonLoopbackHostname"
+		case .fixedPort: return "fixedPort"
+		case .mdnsEnabled: return "mdnsEnabled"
+		case .corsOriginSupplied: return "corsOriginSupplied"
+		case .pureModeMissing: return "pureModeMissing"
+		case .autoApprovalFlag: return "autoApprovalFlag"
+		case .unexpectedSecurityFlag: return "unexpectedSecurityFlag"
+		case .missingServerPassword: return "missingServerPassword"
+		case .weakServerPassword: return "weakServerPassword"
+		case .serverPasswordInArguments: return "serverPasswordInArguments"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeRecoveryRefusalReason) -> String {
+		switch value {
+		case .attemptAlreadyMade: return "attemptAlreadyMade"
+		case .workspaceRootChanged: return "workspaceRootChanged"
+		case .runtimeUnresolvable: return "runtimeUnresolvable"
+		case .runtimeNotAdmitted: return "runtimeNotAdmitted"
+		case .noRecoveryCapability: return "noRecoveryCapability"
+		case .sessionIdentityMissing: return "sessionIdentityMissing"
+		case .frontierContentEvidenceUnsupported: return "frontierContentEvidenceUnsupported"
+		case .frontierOverflowed: return "frontierOverflowed"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeSessionRecoveryPlan) -> String {
+		switch value {
+		case .resume: return "resume"
+		case .loadWithReplayDeduplication: return "loadWithReplayDeduplication"
+		case .refuse: return "refuse"
+		}
+	}
+
+	private static func tag(_ value: OpenCodeRuntimeResolution) -> String {
+		switch value {
+		case .resolved: return "resolved"
+		case .unresolvable: return "unresolvable"
+		}
+	}
+
+	private static func tag(_ value: OpenCodePartialToolInputAssembler.IngestOutcome) -> String {
+		switch value {
+		case .accumulated: return "accumulated"
+		case .terminal: return "terminal"
+		case .duplicateTerminal: return "duplicateTerminal"
+		case .lateUpdate: return "lateUpdate"
+		}
+	}
+
+	private static func sampleIdentity() -> OpenCodeRuntimeIdentity {
+		OpenCodeRuntimeIdentity(
+			resolvedPath: "/Users/dev/.opencode/bin/opencode",
+			realPath: "/Users/dev/.opencode/bin/opencode",
+			sha256: OpenCodeSHA256(String(repeating: "9a", count: 32))!,
+			sizeBytes: 1000,
+			modificationEpochSeconds: nil,
+			architecture: .arm64,
+			signingClass: .adHoc,
+			pathClass: .openCodeManagedBin,
+			cliVersion: OpenCodeCliVersion(string: "1.18.4")!
+		)!
 	}
 
 	// MARK: - Enforcement posture (must survive the promotion unchanged)
