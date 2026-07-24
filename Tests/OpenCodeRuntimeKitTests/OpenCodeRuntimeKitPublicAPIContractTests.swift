@@ -723,19 +723,47 @@ final class OpenCodeRuntimeKitPublicAPIContractTests: XCTestCase {
 	/// reachable and stay fail-closed through a module move.
 	func testManifestDecoderIsFailClosedAndEmptyIsTheAppsConservativeStandIn() {
 		XCTAssertEqual(OpenCodeCompatibilityManifest.expectedSchemaVersion, 1)
-		XCTAssertThrowsError(try OpenCodeCompatibilityManifest.decode(from: Data("{}".utf8)))
-		XCTAssertThrowsError(try OpenCodeCompatibilityManifest.decode(from: Data()))
-		XCTAssertThrowsError(
-			try OpenCodeCompatibilityManifest.decode(from: Data("not json".utf8)))
-		// A well-formed envelope with no families still fails closed rather than
-		// decoding to a permissive manifest.
-		XCTAssertThrowsError(try OpenCodeCompatibilityManifest.decode(
-			from: Data(#"{"schemaVersion":1,"manifestVersion":"1","families":[],"knownBadRules":[]}"#.utf8)))
+		// Assert the SPECIFIC error, not merely "it throws" — a decoder that
+		// rejected everything for the wrong reason would satisfy a bare
+		// `XCTAssertThrowsError`.
+		assertDecodeThrows(Data("{}".utf8), .missingKey("schemaVersion"))
+		assertDecodeThrows(Data(), .notAnObject)
+		assertDecodeThrows(Data("not json".utf8), .notAnObject)
+
+		// Unknown ROOT properties are rejected by name. The allowed set is
+		// {schemaVersion, manifestVersion, families, knownBad} — note the wire key
+		// is `knownBad`, NOT the Swift property name `knownBadRules`.
+		assertDecodeThrows(
+			Data(#"{"schemaVersion":1,"manifestVersion":"1","families":[],"knownBadRules":[]}"#.utf8),
+			.unexpectedProperty("knownBadRules"))
+
+		// A well-formed envelope with NO families decodes successfully. That is
+		// not a permissive outcome: the result certifies nothing and knows
+		// nothing bad, so admission falls through to the behavioral gates
+		// exactly as `.empty` does. (An earlier revision of this test asserted
+		// the opposite and passed only because its JSON misspelled `knownBad` as
+		// `knownBadRules` — it never reached the empty-families path at all.)
+		let decodedEmpty = try? OpenCodeCompatibilityManifest.decode(
+			from: Data(#"{"schemaVersion":1,"manifestVersion":"1","families":[],"knownBad":[]}"#.utf8))
+		XCTAssertNotNil(decodedEmpty, "A well-formed zero-families envelope is decodable")
+		XCTAssertEqual(decodedEmpty?.families.count, 0)
+		XCTAssertEqual(decodedEmpty?.knownBadRules.count, 0)
 
 		// `.empty` is the app's stand-in for an ABSENT manifest; the decoder never
 		// produces it. Both must survive the promotion.
 		XCTAssertTrue(OpenCodeCompatibilityManifest.empty.families.isEmpty)
 		XCTAssertTrue(OpenCodeCompatibilityManifest.empty.knownBadRules.isEmpty)
+	}
+
+	private func assertDecodeThrows(
+		_ data: Data,
+		_ expected: OpenCodeManifestDecodingError,
+		file: StaticString = #filePath,
+		line: UInt = #line
+	) {
+		XCTAssertThrowsError(try OpenCodeCompatibilityManifest.decode(from: data), file: file, line: line) {
+			XCTAssertEqual($0 as? OpenCodeManifestDecodingError, expected, file: file, line: line)
+		}
 	}
 
 	// MARK: - Secure launch contract (validation only — never construction)
