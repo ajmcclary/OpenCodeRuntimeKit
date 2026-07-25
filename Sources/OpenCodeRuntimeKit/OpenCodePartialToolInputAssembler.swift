@@ -54,9 +54,35 @@ public struct OpenCodePartialToolInputAssembler: Sendable {
 		public init() {}
 	}
 
-	private struct OpenCall {
+	/// One merged input field, stored in a genuinely `Sendable` form.
+	///
+	/// The assembler is a public `Sendable` value type, so it cannot STORE the
+	/// `[String: Any]` it ingests — `Any` carries no concurrency guarantee, and
+	/// the values arriving from the wire are Foundation reference types
+	/// (`NSString`/`NSNumber`/`NSArray`/`NSDictionary`). Each field is therefore
+	/// normalized at ingest into its canonical JSON encoding, which is a `Data`
+	/// value: the assembler becomes genuinely sendable rather than
+	/// asserted-sendable, and no `@unchecked` conformance is needed.
+	///
+	/// The encoding is exactly the byte sequence the conflict comparison already
+	/// computed (`["v": value]` serialized with `.sortedKeys`), so
+	/// conflict detection is unchanged; the final document is rebuilt by
+	/// decoding these values and handing the object back to `JSONSerialization`,
+	/// so key ordering and escaping stay owned by Foundation.
+	enum Field: Sendable {
+		/// `JSONSerialization` output for `["v": value]` with `.sortedKeys`.
+		case json(Data)
+		/// The value is not JSON-representable (a non-JSON type, or a non-finite
+		/// number). Deliberately NOT `Equatable`: an unrepresentable value is
+		/// never equivalent to anything, including another unrepresentable value
+		/// — which is what the previous `jsonEquivalent` did, since it returned
+		/// `false` whenever either side failed to serialize.
+		case unrepresentable
+	}
+
+	private struct OpenCall: Sendable {
 		var toolName: String?
-		var mergedInput: [String: Any] = [:]
+		var mergedInput: [String: Field] = [:]
 		var appendedText = ""
 		var conflictingSnapshotCount = 0
 		var updateCount = 0
@@ -137,12 +163,13 @@ public struct OpenCodePartialToolInputAssembler: Sendable {
 		}
 		if let rawInput {
 			for (field, value) in rawInput {
+				let encoded = Self.encodeField(value)
 				if let existing = call.mergedInput[field],
-					!Self.jsonEquivalent(existing, value) {
+					!Self.fieldsEquivalent(existing, encoded) {
 					call.conflictingSnapshotCount += 1
 					metrics.conflicts += 1
 				}
-				call.mergedInput[field] = value
+				call.mergedInput[field] = encoded
 			}
 		}
 		if let textFragment, !textFragment.isEmpty {
@@ -231,22 +258,65 @@ public struct OpenCodePartialToolInputAssembler: Sendable {
 		return evicted
 	}
 
+	/// Normalizes one ingested value into its canonical, sendable encoding.
+	///
+	/// `isValidJSONObject` applies the same per-value rules to `["v": value]`
+	/// that it applies to the whole merged object, so a value that cannot be
+	/// encoded here is exactly a value that would have made the whole-object
+	/// serialization fail.
+	static func encodeField(_ value: Any) -> Field {
+		let wrapper: [String: Any] = ["v": value]
+		guard JSONSerialization.isValidJSONObject(wrapper),
+			let data = try? JSONSerialization.data(withJSONObject: wrapper, options: [.sortedKeys])
+		else { return .unrepresentable }
+		return .json(data)
+	}
+
+	/// Conflict comparison. An unrepresentable value is never equivalent — not
+	/// even to another unrepresentable value.
+	static func fieldsEquivalent(_ lhs: Field, _ rhs: Field) -> Bool {
+		guard case .json(let lhsData) = lhs, case .json(let rhsData) = rhs else { return false }
+		return lhsData == rhsData
+	}
+
+	/// Decodes a stored field back to a JSON value for document assembly.
+	///
+	/// KNOWN DIVERGENCE — negative zero. Serializing at ingest and decoding here
+	/// is value-preserving for every shape reachable from a decoded wire payload
+	/// except `-0.0`: it emits as `-0`, which carries no `.` or exponent and so
+	/// re-parses as an *integer* zero, re-emitting as `0`. Before this type
+	/// stored per-field `Data`, the original value survived to a single
+	/// end-of-life serialization and `-0` was preserved.
+	///
+	/// Splicing the stored canonical bytes would preserve it, but that would
+	/// require reimplementing `JSONSerialization`'s `.sortedKeys` collation,
+	/// which is not byte order — a far larger wire risk than the one it fixes.
+	/// Pinned by `testNegativeZeroIsTheOneKnownRoundTripDivergence()`.
+	static func decodeField(_ field: Field) -> Any? {
+		guard case .json(let data) = field,
+			let wrapper = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+		else { return nil }
+		return wrapper["v"]
+	}
+
+	/// Rebuilds the merged document. A single unrepresentable field yields nil,
+	/// matching the whole-object `isValidJSONObject` check below.
+	static func serializeSorted(_ fields: [String: Field]) -> String? {
+		guard !fields.isEmpty else { return nil }
+		var object: [String: Any] = [:]
+		object.reserveCapacity(fields.count)
+		for (name, field) in fields {
+			guard let value = decodeField(field) else { return nil }
+			object[name] = value
+		}
+		return serializeSorted(object)
+	}
+
 	static func serializeSorted(_ object: [String: Any]) -> String? {
 		guard !object.isEmpty,
 			JSONSerialization.isValidJSONObject(object),
 			let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
 		else { return nil }
 		return String(data: data, encoding: .utf8)
-	}
-
-	static func jsonEquivalent(_ lhs: Any, _ rhs: Any) -> Bool {
-		let lhsObject = ["v": lhs]
-		let rhsObject = ["v": rhs]
-		guard JSONSerialization.isValidJSONObject(lhsObject),
-			JSONSerialization.isValidJSONObject(rhsObject),
-			let lhsData = try? JSONSerialization.data(withJSONObject: lhsObject, options: [.sortedKeys]),
-			let rhsData = try? JSONSerialization.data(withJSONObject: rhsObject, options: [.sortedKeys])
-		else { return false }
-		return lhsData == rhsData
 	}
 }

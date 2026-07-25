@@ -50,15 +50,31 @@ import PackageDescription
 // resumable incremental hasher is implemented here rather than taken
 // from CryptoKit on purpose: CryptoKit's in-progress state is not
 // serializable, and mid-stream persistence is a requirement of replay
-// reconciliation. Swift 5 language mode keeps the moved code
-// byte-behaviorally identical (the AgentRuntimeKit / PromptAssemblyKit /
-// ApplyEditsKit / CodexRuntimeKit / ClaudeRuntimeKit / RepoPromptCore
-// promoted-target precedent).
+// reconciliation.
+//
+// Swift 6 language mode with complete concurrency checking, applied
+// per-target so the policy is checkable target by target. The package is
+// composed of value types with no shared mutable state and no reference
+// types at all, so the migration needed exactly one ownership change:
+// `OpenCodePartialToolInputAssembler` used to STORE the `[String: Any]`
+// tool input it ingests while publicly promising `Sendable`, and now
+// normalizes each field into its canonical JSON encoding at ingest. No
+// `@unchecked Sendable`, `@preconcurrency`, or `nonisolated(unsafe)`
+// appears anywhere in this package.
+//
+// Platforms are declared with the STRING form (`.macOS("27.0")`) rather
+// than the `.v27` enum case: `.v27` requires _PackageDescription 6.4,
+// while the string form parses at every tools-version in this workspace.
+let swiftSettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .enableExperimentalFeature("StrictConcurrency")
+]
+
 let package = Package(
     name: "OpenCodeRuntimeKit",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v17)
+        .macOS("27.0"),
+        .iOS("27.0")
     ],
     products: [
         .library(name: "OpenCodeRuntimeKit", targets: ["OpenCodeRuntimeKit"])
@@ -66,12 +82,12 @@ let package = Package(
     targets: [
         .target(
             name: "OpenCodeRuntimeKit",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: swiftSettings
         ),
         .testTarget(
             name: "OpenCodeRuntimeKitTests",
             dependencies: ["OpenCodeRuntimeKit"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: swiftSettings
         )
     ]
 )
