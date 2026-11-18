@@ -84,9 +84,9 @@ host hands it.
 
 ```swift
 dependencies: [
-    // 0.1.0-beta.4 is a prerelease identifier — SwiftPM only resolves
+    // 0.1.0-beta.5 is a prerelease identifier — SwiftPM only resolves
     // prerelease tags when the lower bound itself names one.
-    .package(url: "https://github.com/ajmcclary/OpenCodeRuntimeKit.git", .upToNextMinor(from: "0.1.0-beta.4"))
+    .package(url: "https://github.com/ajmcclary/OpenCodeRuntimeKit.git", .upToNextMinor(from: "0.1.0-beta.5"))
 ]
 ```
 
